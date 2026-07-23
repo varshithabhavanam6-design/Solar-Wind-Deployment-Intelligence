@@ -1,467 +1,1277 @@
 import { useEffect, useState } from "react";
-import { HiOutlineMapPin, HiOutlineCheckCircle, HiOutlineXCircle } from "react-icons/hi2";
-
-import { getProjects } from "../services/projectService";
-import { getSites } from "../services/siteService";
-import { createReport } from "../services/reportService";
-import { runSiteAnalysis } from "../services/siteAnalysisService";
-import { computeSuitability } from "../utils/suitability";
-import { useAuth } from "../Authentication/AuthContext";
-import { useToast } from "../context/ToastContext";
+import {
+  HiOutlineMapPin,
+  HiOutlineSparkles,
+  HiOutlineChartBar,
+  HiOutlineGlobeAsiaAustralia,
+  HiOutlineCheckCircle,
+  HiOutlineArrowPath,
+} from "react-icons/hi2";
 
 import DashboardLayout from "../components/layout/DashboardLayout";
 import Loader from "../components/ui/Loader";
 import EmptyState from "../components/ui/EmptyState";
+import LocationMap from "../components/LocationMap/LocationMap";
+
+import { getProjects } from "../services/projectService";
+import { createSite, updateSite } from "../services/siteService";
+import { runSiteAnalysis } from "../services/siteAnalysisService";
+import { createReport } from "../services/reportService";
+
+import { computeSuitability } from "../utils/suitability";
+
+import { useAuth } from "../Authentication/AuthContext";
+import { useToast } from "../context/ToastContext";
+import ResourceAssessmentReport from "./ResourceAssessmentReport";
+
+// Wind Potential Prediction — simple prototype-level formulas, frontend-only.
+// No backend or existing state involved; purely derived from
+// analysisResult.environmentalData.windSpeed at render time.
+const WIND_AIR_DENSITY = 1.225; // kg/m3
+const WIND_ROTOR_AREA = 10; // m2
+const WIND_POWER_COEFFICIENT = 0.40;
+const WIND_TURBINE_EFFICIENCY = 35; // %
+
+function calculateWindPrediction(windSpeed) {
+  if (windSpeed === null || windSpeed === undefined || Number.isNaN(windSpeed)) {
+    return null;
+  }
+
+  const windPowerDensity = 0.5 * WIND_AIR_DENSITY * Math.pow(windSpeed, 3);
+
+  const estimatedPower = windPowerDensity * WIND_ROTOR_AREA * WIND_POWER_COEFFICIENT;
+
+  const dailyEnergy = (estimatedPower * 24) / 1000;
+
+  const annualEnergy = dailyEnergy * 365;
+
+  // NOTE: matches the formula requested — not the textbook (rated-power-based)
+  // capacity factor definition, kept as-is for consistency with spec.
+  const capacityFactor = (dailyEnergy / 24) * 100;
+
+  let recommendedTurbine = "Not Recommended";
+
+  if (windSpeed > 8) {
+    recommendedTurbine = "Utility Scale Turbine";
+  } else if (windSpeed > 6) {
+    recommendedTurbine = "Medium Wind Turbine";
+  } else if (windSpeed >= 4) {
+    recommendedTurbine = "Small Wind Turbine";
+  }
+
+  return {
+    windSpeed,
+    windPowerDensity,
+    dailyEnergy,
+    annualEnergy,
+    capacityFactor,
+    turbineEfficiency: WIND_TURBINE_EFFICIENCY,
+    recommendedTurbine,
+  };
+}
+
+function formatWindMetric(value, decimals = 2) {
+  return value === null || value === undefined ? "--" : value.toFixed(decimals);
+}
 
 export default function SiteAnalysis() {
   const { currentUser } = useAuth();
   const { showToast } = useToast();
 
   const [projects, setProjects] = useState([]);
-  const [sites, setSites] = useState([]);
   const [loadingProjects, setLoadingProjects] = useState(true);
-  const [loadingSites, setLoadingSites] = useState(false);
-  const [saving, setSaving] = useState(false);
 
   const [selectedProjectId, setSelectedProjectId] = useState("");
-  const [selectedSiteId, setSelectedSiteId] = useState("");
+
+  const [siteName, setSiteName] = useState("");
+
   const [latitude, setLatitude] = useState("");
   const [longitude, setLongitude] = useState("");
+
+  const [locationDetails, setLocationDetails] = useState(null);
+
+  const [savedSiteId, setSavedSiteId] = useState(null);
+
   const [notes, setNotes] = useState("");
 
-  // Holds the last backend response so results can be displayed after saving.
   const [analysisResult, setAnalysisResult] = useState(null);
-  // Rule-based suitability summary computed from that response — see
-  // src/utils/suitability.js for the scoring logic.
+
   const [suitability, setSuitability] = useState(null);
+
+  const [loading, setLoading] = useState(false);
+
+  const [progress, setProgress] = useState("");
 
   useEffect(() => {
     loadProjects();
   }, []);
 
-  useEffect(() => {
-    if (selectedProjectId) {
-      loadSites(selectedProjectId);
-    } else {
-      setSites([]);
-    }
-    setSelectedSiteId("");
-    setLatitude("");
-    setLongitude("");
-    setAnalysisResult(null);
-    setSuitability(null);
-  }, [selectedProjectId]);
-
-  const loadProjects = async () => {
+  async function loadProjects() {
     try {
       setLoadingProjects(true);
+
       const data = await getProjects();
+
       setProjects(data);
     } catch (error) {
-      console.error(error);
-      showToast("Couldn't load projects.", "error");
+      showToast("Unable to load projects", "error");
     } finally {
       setLoadingProjects(false);
     }
-  };
+  }
 
-  const loadSites = async (projectId) => {
-    try {
-      setLoadingSites(true);
-      const data = await getSites(projectId);
-      setSites(data);
-    } catch (error) {
-      console.error(error);
-      showToast("Couldn't load sites for this project.", "error");
-    } finally {
-      setLoadingSites(false);
-    }
-  };
-
-  const handleSiteSelect = (siteId) => {
-    setSelectedSiteId(siteId);
+  function resetForm() {
+    setSiteName("");
+    setLatitude("");
+    setLongitude("");
+    setLocationDetails(null);
+    setSavedSiteId(null);
     setAnalysisResult(null);
     setSuitability(null);
-    const site = sites.find((s) => s.id === siteId);
+    setNotes("");
+    setProgress("");
+  }
 
-    if (site) {
-      setLatitude(site.latitude ?? "");
-      setLongitude(site.longitude ?? "");
+  function handleProjectChange(id) {
+    setSelectedProjectId(id);
+    resetForm();
+  }
+
+  function handleLocationSelect(location) {
+    setLatitude(location.latitude);
+    setLongitude(location.longitude);
+    setLocationDetails(location);
+
+    setAnalysisResult(null);
+    setSuitability(null);
+  }
+
+  function validate() {
+    if (!selectedProjectId) {
+      showToast("Select Project", "error");
+      return false;
     }
-  };
 
-  const handleSaveAnalysis = async (e) => {
+    if (!siteName.trim()) {
+      showToast("Enter Site Name", "error");
+      return false;
+    }
+
+    if (latitude === "" || longitude === "") {
+      showToast("Select location on map", "error");
+      return false;
+    }
+
+    return true;
+  }
+
+  async function persistSite() {
+    const payload = {
+      projectId: selectedProjectId,
+      siteName: siteName.trim(),
+      latitude: Number(latitude),
+      longitude: Number(longitude),
+      createdBy: currentUser?.email,
+      locationDetails,
+    };
+
+    if (savedSiteId) {
+      await updateSite(savedSiteId, payload);
+      return savedSiteId;
+    }
+
+    const id = await createSite(payload);
+
+    setSavedSiteId(id);
+
+    return id;
+  }
+
+  async function handleRunAnalysis(e) {
     e.preventDefault();
 
-    if (!selectedProjectId || !selectedSiteId || !latitude || !longitude) {
-      showToast("Please select a project, a site, and enter coordinates.", "error");
-      return;
-    }
-
-    const project = projects.find((p) => p.id === selectedProjectId);
-    const site = sites.find((s) => s.id === selectedSiteId);
+    if (!validate()) return;
 
     try {
-      setSaving(true);
+      setLoading(true);
+
       setAnalysisResult(null);
+
       setSuitability(null);
 
-      // 1. Call the Python backend — fetches NASA POWER, elevation (SRTM),
-      //    and OpenStreetMap data concurrently and combines the result.
+      setProgress("Saving Site...");
+
+      const siteId = await persistSite();
+
+      const project = projects.find(
+        (item) => item.id === selectedProjectId
+      );
+
+      setProgress("Collecting Environmental Data...");
+
       const result = await runSiteAnalysis({
         projectId: selectedProjectId,
-        siteId: selectedSiteId,
+        siteId,
         latitude: Number(latitude),
         longitude: Number(longitude),
       });
 
       setAnalysisResult(result);
 
-      // 2. Compute a simple, rule-based suitability rating from that data —
-      //    not machine learning, just transparent point-scoring (see
-      //    src/utils/suitability.js). Uses the project's energyType to pick
-      //    the right factor set (solar irradiance vs. wind speed).
+      setProgress("Calculating Suitability...");
+
       const suitabilityResult = computeSuitability(
-        project?.energyType,
+        project.energyType,
         result.environmentalData,
         result.terrainData,
         result.gisData
       );
+
       setSuitability(suitabilityResult);
 
-      // 3. Save the combined analysis into the existing reports collection,
-      //    using the nested shape: environmentalData / terrainData / gisData /
-      //    sources / errors — matching the backend response structure directly.
+      setProgress("Generating Report...");
+
       await createReport({
         type: "site-analysis",
-        projectId: selectedProjectId,
-        projectName: project?.projectName || "",
-        siteId: selectedSiteId,
-        siteName: site?.siteName || "",
-        latitude: Number(latitude),
-        longitude: Number(longitude),
-        notes,
-        createdBy: currentUser?.email || "Unknown",
-        status: result.success ? "Analysis Complete" : "Partially Completed",
 
-        environmentalData: result.environmentalData || {},
-        terrainData: result.terrainData || {},
-        gisData: result.gisData || {},
-        sources: result.sources || {},
-        errors: result.errors || {},
+        projectId: selectedProjectId,
+
+        projectName: project.projectName,
+
+        siteId,
+
+        siteName,
+
+        latitude: Number(latitude),
+
+        longitude: Number(longitude),
+
+        notes,
+
+        createdBy: currentUser?.email,
+
+        locationDetails,
+
+        status: result.success
+          ? "Analysis Complete"
+          : "Partial Analysis",
+
+        environmentalData: result.environmentalData,
+
+        terrainData: result.terrainData,
+
+        gisData: result.gisData,
+
         suitabilitySummary: suitabilityResult,
+
+        sources: result.sources,
+
+        errors: result.errors,
       });
 
-      if (result.success) {
-        showToast("Analysis completed and saved successfully.");
-      } else {
-        showToast(
-          "Analysis saved, but some data sources were unavailable — see details below.",
-          "info"
-        );
-      }
+      setProgress("Completed");
 
-      setNotes("");
+      showToast("Analysis Completed");
     } catch (error) {
-      console.error(error);
-      showToast(error.message || "Failed to save analysis.", "error");
-    } finally {
-      setSaving(false);
-    }
-  };
 
-  return (
-    <DashboardLayout>
-      <div className="max-w-5xl mx-auto px-6 lg:px-10 py-10">
-        <h1 className="text-4xl font-bold text-slate-900">Site Analysis</h1>
-        <p className="mt-3 text-slate-600">
-          Select a project and site to run a live environmental, terrain, and
-          GIS analysis for that location.
+      showToast(error.message, "error");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const windPrediction = calculateWindPrediction(
+    analysisResult?.environmentalData?.windSpeed
+  );
+
+  const hasLocation =
+    latitude !== "" && longitude !== "";
+    return (
+  <DashboardLayout>
+    <div className="max-w-7xl mx-auto px-6 py-8">
+
+      {/* Header */}
+
+      <div className="mb-8">
+        <h1 className="text-4xl font-bold text-slate-900">
+          Renewable Energy Site Analysis
+        </h1>
+
+        <p className="mt-2 text-slate-600">
+          Select a project, choose any location on the map, and perform
+          environmental, terrain and GIS analysis.
+        </p>
+      </div>
+
+      {loadingProjects ? (
+        <Loader label="Loading Projects..." />
+      ) : projects.length === 0 ? (
+        <EmptyState
+          icon={HiOutlineMapPin}
+          title="No Projects Found"
+          message="Create a project before starting analysis."
+        />
+      ) : (
+        <>
+          {/* Project */}
+
+          <div className="bg-white rounded-3xl shadow-md p-6 mb-6">
+
+            <label className="block font-semibold text-slate-700 mb-2">
+              Project
+            </label>
+
+            <select
+              value={selectedProjectId}
+              onChange={(e) =>
+                handleProjectChange(e.target.value)
+              }
+              className="w-full border rounded-xl p-3"
+            >
+              <option value="">
+                Select Project
+              </option>
+
+              {projects.map((project) => (
+                <option
+                  key={project.id}
+                  value={project.id}
+                >
+                  {project.projectName}
+                  {" "}
+                  (
+                  {project.energyType}
+                  )
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {selectedProjectId && (
+            <div className="grid lg:grid-cols-3 gap-6">
+
+              {/* Left */}
+
+              <div className="lg:col-span-2">
+
+                <div className="bg-white rounded-3xl shadow-md overflow-hidden">
+
+                  <div className="p-6 border-b">
+
+                    <h2 className="text-2xl font-bold flex items-center gap-2">
+
+                      <HiOutlineGlobeAsiaAustralia className="text-blue-600"/>
+
+                      Select Analysis Location
+
+                    </h2>
+
+                    <p className="text-slate-500 mt-2">
+
+                      Search any city or click anywhere on the map.
+
+                    </p>
+
+                  </div>
+
+                  <div className="p-5">
+
+                    <LocationMap
+                      onLocationSelect={handleLocationSelect}
+                      initialLatitude={
+                        hasLocation
+                          ? Number(latitude)
+                          : undefined
+                      }
+                      initialLongitude={
+                        hasLocation
+                          ? Number(longitude)
+                          : undefined
+                      }
+                    />
+
+                  </div>
+
+                </div>
+
+              </div>
+
+              {/* Right */}
+
+              <div>
+
+                <div className="bg-white rounded-3xl shadow-md p-6">
+
+                  <h2 className="text-xl font-bold mb-5">
+                    Site Details
+                  </h2>
+
+                  <label className="block font-medium mb-2">
+                    Site Name
+                  </label>
+
+                  <input
+                    value={siteName}
+                    onChange={(e) =>
+                      setSiteName(e.target.value)
+                    }
+                    className="w-full border rounded-xl p-3 mb-5"
+                    placeholder="Enter Site Name"
+                  />
+
+                  <div className="space-y-4">
+
+                    <div className="rounded-xl bg-slate-50 p-4">
+
+                      <p className="text-xs text-slate-500">
+                        Latitude
+                      </p>
+
+                      <p className="font-semibold">
+                        {hasLocation
+                          ? Number(latitude).toFixed(6)
+                          : "--"}
+                      </p>
+
+                    </div>
+
+                    <div className="rounded-xl bg-slate-50 p-4">
+
+                      <p className="text-xs text-slate-500">
+                        Longitude
+                      </p>
+
+                      <p className="font-semibold">
+                        {hasLocation
+                          ? Number(longitude).toFixed(6)
+                          : "--"}
+                      </p>
+
+                    </div>
+
+                    <div className="rounded-xl bg-slate-50 p-4">
+
+                      <p className="text-xs text-slate-500">
+                        State
+                      </p>
+
+                      <p className="font-semibold">
+                        {locationDetails?.state || "--"}
+                      </p>
+
+                    </div>
+
+                    <div className="rounded-xl bg-slate-50 p-4">
+
+                      <p className="text-xs text-slate-500">
+                        Country
+                      </p>
+
+                      <p className="font-semibold">
+                        {locationDetails?.country || "--"}
+                      </p>
+
+                    </div>
+
+                  </div>
+
+                  {locationDetails?.displayName && (
+
+                    <div className="mt-5 rounded-xl bg-blue-50 p-4">
+
+                      <p className="text-xs text-slate-500">
+                        Full Address
+                      </p>
+
+                      <p className="text-sm mt-2">
+                        {locationDetails.displayName}
+                      </p>
+
+                    </div>
+
+                  )}
+
+                </div>
+
+                <div className="bg-white rounded-3xl shadow-md p-6 mt-6">
+
+                  <label className="block font-semibold mb-3">
+                    Notes
+                  </label>
+
+                  <textarea
+                    rows={4}
+                    value={notes}
+                    onChange={(e) =>
+                      setNotes(e.target.value)
+                    }
+                    className="w-full border rounded-xl p-3"
+                    placeholder="Optional notes..."
+                  />
+
+                  <button
+                    onClick={handleRunAnalysis}
+                    disabled={loading}
+                    className="w-full mt-6 bg-blue-600 hover:bg-blue-700 text-white rounded-xl py-3 font-semibold transition"
+                  >
+                    {loading
+                      ? "Running Analysis..."
+                      : "Run Analysis"}
+                  </button>
+
+                  {loading && (
+
+                    <div className="mt-6">
+
+                      <div className="flex items-center gap-3">
+
+                        <HiOutlineArrowPath className="animate-spin text-blue-600"/>
+
+                        <span className="text-sm">
+
+                          {progress}
+
+                        </span>
+
+                      </div>
+
+                    </div>
+
+                  )}
+
+                </div>
+
+              </div>
+
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Results Panel */}
+      {/* ======================= RESULTS ======================= */}
+
+{analysisResult && (
+  <div className="mt-10 space-y-8">
+
+    <div className="flex items-center gap-3">
+
+      <HiOutlineChartBar className="text-3xl text-blue-600"/>
+
+      <div>
+
+        <h2 className="text-3xl font-bold text-slate-900">
+          Analysis Dashboard
+        </h2>
+
+        <p className="text-slate-500">
+          Environmental, Terrain & GIS Statistics
         </p>
 
-        {loadingProjects ? (
-          <Loader label="Loading projects..." />
-        ) : projects.length === 0 ? (
-          <EmptyState
-            icon={HiOutlineMapPin}
-            title="No Projects Available"
-            message="Create a project first before running a site analysis."
-          />
-        ) : (
-          <form
-            onSubmit={handleSaveAnalysis}
-            className="mt-10 bg-white rounded-3xl shadow-lg p-8 space-y-6"
-          >
-            <div>
-              <label className="block font-medium mb-2 text-slate-700">
-                Select Project
-              </label>
-              <select
-                value={selectedProjectId}
-                onChange={(e) => setSelectedProjectId(e.target.value)}
-                required
-                className="w-full border rounded-lg p-3"
-              >
-                <option value="">-- Choose a project --</option>
-                {projects.map((project) => (
-                  <option key={project.id} value={project.id}>
-                    {project.projectName} ({project.energyType})
-                  </option>
-                ))}
-              </select>
-            </div>
+      </div>
 
-            <div>
-              <label className="block font-medium mb-2 text-slate-700">
-                Select Site
-              </label>
+    </div>
 
-              {loadingSites ? (
-                <p className="text-slate-500 text-sm">Loading sites...</p>
-              ) : (
-                <select
-                  value={selectedSiteId}
-                  onChange={(e) => handleSiteSelect(e.target.value)}
-                  required
-                  disabled={!selectedProjectId || sites.length === 0}
-                  className="w-full border rounded-lg p-3 disabled:bg-slate-50 disabled:text-slate-400"
-                >
-                  <option value="">
-                    {selectedProjectId
-                      ? sites.length === 0
-                        ? "No sites found for this project"
-                        : "-- Choose a site --"
-                      : "Select a project first"}
-                  </option>
-                  {sites.map((site) => (
-                    <option key={site.id} value={site.id}>
-                      {site.siteName}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </div>
+    {/* Metric Cards */}
 
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block font-medium mb-2 text-slate-700">
-                  Latitude
-                </label>
-                <input
-                  type="number"
-                  step="any"
-                  value={latitude}
-                  onChange={(e) => setLatitude(e.target.value)}
-                  required
-                  className="w-full border rounded-lg p-3"
-                />
-              </div>
+    <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
 
-              <div>
-                <label className="block font-medium mb-2 text-slate-700">
-                  Longitude
-                </label>
-                <input
-                  type="number"
-                  step="any"
-                  value={longitude}
-                  onChange={(e) => setLongitude(e.target.value)}
-                  required
-                  className="w-full border rounded-lg p-3"
-                />
-              </div>
-            </div>
+      <div className="bg-gradient-to-r from-yellow-400 to-orange-500 rounded-3xl p-6 text-white shadow-lg">
 
-            <div>
-              <label className="block font-medium mb-2 text-slate-700">
-                Notes (optional)
-              </label>
-              <textarea
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                rows={3}
-                className="w-full border rounded-lg p-3"
-                placeholder="Any observations about this location..."
-              />
-            </div>
+        <p className="text-sm opacity-90">
+          Solar Irradiance
+        </p>
 
-            <button
-              type="submit"
-              disabled={saving}
-              className="w-full bg-blue-600 text-white py-3 rounded-xl font-semibold hover:bg-blue-700 disabled:opacity-60"
-            >
-              {saving ? "Running Analysis..." : "Save Analysis"}
-            </button>
-          </form>
-        )}
+        <h3 className="text-3xl font-bold mt-2">
+          {analysisResult.environmentalData?.solarIrradiance ?? "--"}
+        </h3>
 
-        {/* Results panel — only appears after a successful backend call */}
-        {analysisResult && (
-          <div className="mt-8 bg-white rounded-3xl shadow-lg p-8">
-            <h2 className="text-2xl font-semibold text-slate-900">
-              Analysis Results
-            </h2>
+        <p className="text-sm mt-1">
+          kWh/m²/day
+        </p>
 
-            <div className="mt-6 grid sm:grid-cols-2 lg:grid-cols-4 gap-5">
-              <div className="rounded-2xl bg-slate-50 p-5">
-                <p className="text-sm text-slate-500">Solar Irradiance</p>
-                <p className="mt-1 text-2xl font-bold text-slate-900">
-                  {analysisResult.environmentalData?.solarIrradiance ?? "—"}
-                  <span className="text-sm font-normal text-slate-500 ml-1">
-                    kWh/m²/day
-                  </span>
-                </p>
-              </div>
+      </div>
 
-              <div className="rounded-2xl bg-slate-50 p-5">
-                <p className="text-sm text-slate-500">Temperature</p>
-                <p className="mt-1 text-2xl font-bold text-slate-900">
-                  {analysisResult.environmentalData?.temperature ?? "—"}
-                  <span className="text-sm font-normal text-slate-500 ml-1">
-                    °C
-                  </span>
-                </p>
-              </div>
+      <div className="bg-gradient-to-r from-cyan-500 to-blue-600 rounded-3xl p-6 text-white shadow-lg">
 
-              <div className="rounded-2xl bg-slate-50 p-5">
-                <p className="text-sm text-slate-500">Wind Speed</p>
-                <p className="mt-1 text-2xl font-bold text-slate-900">
-                  {analysisResult.environmentalData?.windSpeed ?? "—"}
-                  <span className="text-sm font-normal text-slate-500 ml-1">
-                    m/s
-                  </span>
-                </p>
-              </div>
+        <p className="text-sm">
+          Temperature
+        </p>
 
-              <div className="rounded-2xl bg-slate-50 p-5">
-                <p className="text-sm text-slate-500">Elevation</p>
-                <p className="mt-1 text-2xl font-bold text-slate-900">
-                  {analysisResult.terrainData?.elevation ?? "—"}
-                  <span className="text-sm font-normal text-slate-500 ml-1">
-                    m
-                  </span>
-                </p>
-              </div>
-            </div>
+        <h3 className="text-3xl font-bold mt-2">
+          {analysisResult.environmentalData?.temperature ?? "--"}
+        </h3>
 
-            <div className="mt-5 grid sm:grid-cols-3 gap-5 text-sm">
-              <div className="rounded-2xl border border-slate-200 p-4">
-                <p className="text-slate-500">Nearby Roads</p>
-                <p className="font-semibold text-slate-900">
-                  {analysisResult.gisData?.roadCount ?? 0} found
-                </p>
-              </div>
-              <div className="rounded-2xl border border-slate-200 p-4">
-                <p className="text-slate-500">Power Infrastructure</p>
-                <p className="font-semibold text-slate-900">
-                  {analysisResult.gisData?.powerInfrastructureCount ?? 0} found
-                </p>
-              </div>
-              <div className="rounded-2xl border border-slate-200 p-4">
-                <p className="text-slate-500">Water Bodies</p>
-                <p className="font-semibold text-slate-900">
-                  {analysisResult.gisData?.waterBodyCount ?? 0} found
-                </p>
-              </div>
-            </div>
+        <p className="text-sm">
+          °C
+        </p>
 
-            {/* Land Use — only rendered when the backend returned tags */}
-            {analysisResult.gisData?.landUse?.length > 0 && (
-              <div className="mt-5">
-                <p className="text-sm text-slate-500 mb-2">Land Use Nearby</p>
-                <div className="flex flex-wrap gap-2">
-                  {analysisResult.gisData.landUse.map((tag) => (
-                    <span
-                      key={tag}
-                      className="px-3 py-1.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
+      </div>
 
-            {/* Per-source status, so partial failures are visible, not hidden */}
-            <div className="mt-6 flex flex-wrap gap-3">
-              {Object.entries(analysisResult.sources || {}).map(([source, status]) => (
-                <span
-                  key={source}
-                  className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold ${
-                    status === "success"
-                      ? "bg-green-100 text-green-700"
-                      : "bg-red-100 text-red-700"
-                  }`}
-                >
-                  {status === "success" ? (
-                    <HiOutlineCheckCircle />
-                  ) : (
-                    <HiOutlineXCircle />
-                  )}
-                  {source}: {status}
-                </span>
-              ))}
-            </div>
+      <div className="bg-gradient-to-r from-green-500 to-emerald-600 rounded-3xl p-6 text-white shadow-lg">
 
-            {analysisResult.errors && Object.keys(analysisResult.errors).length > 0 && (
-              <p className="mt-3 text-sm text-slate-500">
-                {Object.values(analysisResult.errors).join(" ")}
-              </p>
-            )}
+        <p className="text-sm">
+          Wind Speed
+        </p>
+
+        <h3 className="text-3xl font-bold mt-2">
+          {analysisResult.environmentalData?.windSpeed ?? "--"}
+        </h3>
+
+        <p className="text-sm">
+          m/s
+        </p>
+
+      </div>
+
+      <div className="bg-gradient-to-r from-purple-500 to-indigo-600 rounded-3xl p-6 text-white shadow-lg">
+
+        <p className="text-sm">
+          Elevation
+        </p>
+
+        <h3 className="text-3xl font-bold mt-2">
+          {analysisResult.terrainData?.elevation ?? "--"}
+        </h3>
+
+        <p className="text-sm">
+          meters
+        </p>
+
+      </div>
+
+    </div>
+
+    {/* GIS */}
+
+    <div className="grid lg:grid-cols-2 gap-6">
+
+      <div className="bg-white rounded-3xl shadow-md p-6">
+
+        <h3 className="text-xl font-bold mb-5">
+          GIS Information
+        </h3>
+
+        <div className="space-y-4">
+
+          <div className="flex justify-between">
+
+            <span>Roads Nearby</span>
+
+            <span className="font-bold">
+              {analysisResult.gisData?.roadCount ?? 0}
+            </span>
+
           </div>
-        )}
 
-        {/* Suitability Summary — simple rule-based scoring, not ML.
-            See src/utils/suitability.js for the point system. */}
-        {suitability && (
-          <div className="mt-8 bg-white rounded-3xl shadow-lg p-8">
-            <h2 className="text-2xl font-semibold text-slate-900">
-              Suitability Summary
-            </h2>
+          <div className="flex justify-between">
 
-            <div className="mt-5 flex items-center gap-4 flex-wrap">
-              <span
-                className={`inline-flex items-center px-4 py-2 rounded-full text-sm font-bold ${
-                  suitability.level === "High Potential"
-                    ? "bg-green-100 text-green-700"
-                    : suitability.level === "Moderate Potential"
-                    ? "bg-yellow-100 text-yellow-700"
-                    : suitability.level === "Low Potential"
-                    ? "bg-red-100 text-red-700"
-                    : "bg-slate-100 text-slate-600"
-                }`}
-              >
-                {suitability.level}
-              </span>
+            <span>Power Infrastructure</span>
 
-              {suitability.maxScore > 0 && (
-                <span className="text-sm text-slate-500">
-                  Score: {suitability.score} / {suitability.maxScore}
-                </span>
+            <span className="font-bold">
+              {analysisResult.gisData?.powerInfrastructureCount ?? 0}
+            </span>
+
+          </div>
+
+          <div className="flex justify-between">
+
+            <span>Water Bodies</span>
+
+            <span className="font-bold">
+              {analysisResult.gisData?.waterBodyCount ?? 0}
+            </span>
+
+          </div>
+
+          <div className="flex justify-between">
+
+            <span>Buildings</span>
+
+            <span className="font-bold">
+              {analysisResult.gisData?.buildingCount ?? 0}
+            </span>
+
+          </div>
+
+        </div>
+
+      </div>
+
+      {/* Data Sources */}
+
+      <div className="bg-white rounded-3xl shadow-md p-6">
+
+        <h3 className="text-xl font-bold mb-5">
+          Data Sources
+        </h3>
+
+        <div className="flex flex-wrap gap-3">
+
+          {Object.entries(
+            analysisResult.sources || {}
+          ).map(([source, status]) => (
+
+            <div
+              key={source}
+              className={`px-4 py-2 rounded-full text-sm font-semibold flex items-center gap-2
+
+              ${
+                status === "success"
+                  ? "bg-green-100 text-green-700"
+                  : "bg-red-100 text-red-700"
+              }`}
+            >
+
+              {status === "success" ? (
+
+                <HiOutlineCheckCircle/>
+
+              ) : (
+
+                <HiOutlineMapPin/>
+
               )}
+
+              {source}
+
             </div>
 
-            <ul className="mt-5 space-y-2">
-              {suitability.reasons.map((reason, index) => (
-                <li
-                  key={index}
-                  className="flex items-start gap-2 text-sm text-slate-700"
-                >
-                  <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
-                  {reason}
+          ))}
+
+        </div>
+
+        {analysisResult.errors &&
+          Object.keys(
+            analysisResult.errors
+          ).length > 0 && (
+
+          <div className="mt-6 bg-red-50 rounded-2xl p-5">
+
+            <h4 className="font-bold text-red-700 mb-2">
+              Errors
+            </h4>
+
+            <ul className="list-disc pl-5 space-y-2">
+
+              {Object.values(
+                analysisResult.errors
+              ).map((err, index) => (
+
+                <li key={index}>
+                  {err}
                 </li>
+
               ))}
+
             </ul>
 
-            <p className="mt-5 text-xs text-slate-400">
-              This is a simple rule-based estimate using the environmental,
-              terrain, and GIS data above — not a machine learning
-              prediction. A learned suitability model is planned for a
-              later milestone.
-            </p>
           </div>
+
         )}
+
       </div>
-    </DashboardLayout>
-  );
+
+    </div>
+
+    {/* Land Use */}
+
+    {analysisResult.gisData?.landUse?.length > 0 && (
+
+      <div className="bg-white rounded-3xl shadow-md p-6">
+
+        <h3 className="text-xl font-bold mb-5">
+          Land Use Classification
+        </h3>
+
+        <div className="flex flex-wrap gap-3">
+
+          {analysisResult.gisData.landUse.map((land) => (
+
+            <span
+              key={land}
+              className="px-4 py-2 bg-blue-100 text-blue-700 rounded-full font-semibold"
+            >
+              {land}
+            </span>
+
+          ))}
+
+        </div>
+
+      </div>
+
+    )}
+
+  </div>
+)}
+
+{/* ======================= SOLAR PREDICTION ======================= */}
+
+{analysisResult?.solarPrediction && (
+  <div className="mt-10">
+
+    <div className="bg-white rounded-3xl shadow-md p-6">
+
+      <h2 className="text-3xl font-bold mb-6">
+        ☀ Solar Potential Prediction
+      </h2>
+
+      <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+
+        <div className="bg-yellow-50 rounded-2xl p-5">
+          <p className="text-sm text-gray-500">
+            Annual Irradiance
+          </p>
+
+          <h3 className="text-3xl font-bold">
+            {analysisResult.solarPrediction.annualIrradiance}
+          </h3>
+
+          <p>kWh/m²/day</p>
+        </div>
+
+        <div className="bg-orange-50 rounded-2xl p-5">
+          <p className="text-sm text-gray-500">
+            Peak Sun Hours
+          </p>
+
+          <h3 className="text-3xl font-bold">
+            {analysisResult.solarPrediction.peakSunHours}
+          </h3>
+
+          <p>hrs/day</p>
+        </div>
+
+        <div className="bg-green-50 rounded-2xl p-5">
+          <p className="text-sm text-gray-500">
+            Daily Energy
+          </p>
+
+          <h3 className="text-3xl font-bold">
+            {analysisResult.solarPrediction.dailyEnergyOutput}
+          </h3>
+
+          <p>kWh</p>
+        </div>
+
+        <div className="bg-blue-50 rounded-2xl p-5">
+          <p className="text-sm text-gray-500">
+            Annual Energy
+          </p>
+
+          <h3 className="text-3xl font-bold">
+            {analysisResult.solarPrediction.annualEnergyOutput}
+          </h3>
+
+          <p>kWh/year</p>
+        </div>
+
+        <div className="bg-purple-50 rounded-2xl p-5">
+          <p className="text-sm text-gray-500">
+            Capacity Factor
+          </p>
+
+          <h3 className="text-3xl font-bold">
+            {analysisResult.solarPrediction.capacityFactor}%
+          </h3>
+        </div>
+
+        <div className="bg-cyan-50 rounded-2xl p-5">
+          <p className="text-sm text-gray-500">
+            Performance Ratio
+          </p>
+
+          <h3 className="text-3xl font-bold">
+            {analysisResult.solarPrediction.performanceRatio}
+          </h3>
+        </div>
+
+        <div className="bg-indigo-50 rounded-2xl p-5">
+          <p className="text-sm text-gray-500">
+            Panel Efficiency
+          </p>
+
+          <h3 className="text-3xl font-bold">
+            {analysisResult.solarPrediction.panelEfficiency}%
+          </h3>
+        </div>
+
+        <div className="bg-emerald-100 rounded-2xl p-5">
+
+          <p className="text-sm text-gray-500">
+            Solar Potential
+          </p>
+
+          <h3 className="text-3xl font-bold text-green-700">
+            {analysisResult.solarPrediction.solarPotential}
+          </h3>
+
+        </div>
+
+      </div>
+
+    </div>
+
+  </div>
+)}
+{/* ======================= WIND PREDICTION ======================= */}
+
+{analysisResult && (
+  <div className="mt-10">
+
+    <div className="bg-white rounded-3xl shadow-md p-6">
+
+      <h2 className="text-3xl font-bold mb-6">
+        🌬 Wind Potential Prediction
+      </h2>
+
+      <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+
+        <div className="bg-sky-50 rounded-2xl p-5">
+          <p className="text-sm text-gray-500">
+            Wind Speed
+          </p>
+
+          <h3 className="text-3xl font-bold">
+            {formatWindMetric(windPrediction?.windSpeed)}
+          </h3>
+
+          <p>m/s</p>
+        </div>
+
+        <div className="bg-blue-50 rounded-2xl p-5">
+          <p className="text-sm text-gray-500">
+            Wind Power Density
+          </p>
+
+          <h3 className="text-3xl font-bold">
+            {formatWindMetric(windPrediction?.windPowerDensity)}
+          </h3>
+
+          <p>W/m²</p>
+        </div>
+
+        <div className="bg-green-50 rounded-2xl p-5">
+          <p className="text-sm text-gray-500">
+            Daily Energy
+          </p>
+
+          <h3 className="text-3xl font-bold">
+            {formatWindMetric(windPrediction?.dailyEnergy)}
+          </h3>
+
+          <p>kWh</p>
+        </div>
+
+        <div className="bg-purple-50 rounded-2xl p-5">
+          <p className="text-sm text-gray-500">
+            Annual Energy
+          </p>
+
+          <h3 className="text-3xl font-bold">
+            {formatWindMetric(windPrediction?.annualEnergy, 0)}
+          </h3>
+
+          <p>kWh/year</p>
+        </div>
+
+        <div className="bg-orange-50 rounded-2xl p-5">
+          <p className="text-sm text-gray-500">
+            Capacity Factor
+          </p>
+
+          <h3 className="text-3xl font-bold">
+            {formatWindMetric(windPrediction?.capacityFactor)}%
+          </h3>
+        </div>
+
+        <div className="bg-cyan-50 rounded-2xl p-5">
+          <p className="text-sm text-gray-500">
+            Turbine Efficiency
+          </p>
+
+          <h3 className="text-3xl font-bold">
+            {formatWindMetric(windPrediction?.turbineEfficiency, 0)}%
+          </h3>
+        </div>
+
+        <div className="bg-emerald-100 rounded-2xl p-5">
+
+          <p className="text-sm text-gray-500">
+            Recommended Turbine
+          </p>
+
+          <h3 className="text-3xl font-bold text-green-700">
+            {windPrediction?.recommendedTurbine || "--"}
+          </h3>
+
+        </div>
+
+      </div>
+
+    </div>
+
+  </div>
+)}
+{/* ======================= SUITABILITY ======================= */}
+
+{suitability && (
+  <div className="mt-10">
+
+    <div className="bg-white rounded-3xl shadow-lg overflow-hidden">
+
+      {/* Header */}
+
+      <div className="bg-gradient-to-r from-green-600 via-emerald-600 to-teal-600 text-white p-8">
+
+        <div className="flex items-center gap-3">
+
+          <HiOutlineSparkles className="text-4xl" />
+
+          <div>
+
+            <h2 className="text-3xl font-bold">
+              Suitability Assessment
+            </h2>
+
+            <p className="opacity-90 mt-1">
+              Rule-based Renewable Energy Evaluation
+            </p>
+
+          </div>
+
+        </div>
+
+      </div>
+
+      <div className="p-8">
+
+        {/* Score */}
+
+        <div className="grid lg:grid-cols-3 gap-8">
+
+          <div className="text-center">
+
+            <div className="w-40 h-40 rounded-full border-[12px] border-blue-500 flex items-center justify-center mx-auto">
+
+              <div>
+
+                <h1 className="text-5xl font-bold text-slate-900">
+                  {suitability.score}
+                </h1>
+
+                <p className="text-slate-500">
+                  / {suitability.maxScore}
+                </p>
+
+              </div>
+
+            </div>
+
+            <h3 className="mt-6 text-2xl font-bold">
+
+              {suitability.level}
+
+            </h3>
+
+          </div>
+
+          {/* Progress */}
+
+          <div className="lg:col-span-2">
+
+            <div>
+
+              <div className="flex justify-between mb-2">
+
+                <span className="font-semibold">
+                  Overall Score
+                </span>
+
+                <span className="font-semibold">
+                  {Math.round(
+                    (suitability.score /
+                      suitability.maxScore) *
+                      100
+                  )}
+                  %
+                </span>
+
+              </div>
+
+              <div className="h-5 rounded-full bg-slate-200 overflow-hidden">
+
+                <div
+                  className={`h-full transition-all duration-700
+
+                  ${
+                    suitability.level === "High Potential"
+                      ? "bg-green-500"
+
+                      : suitability.level ===
+                        "Moderate Potential"
+
+                      ? "bg-yellow-500"
+
+                      : "bg-red-500"
+                  }`}
+                  style={{
+                    width: `${
+                      (suitability.score /
+                        suitability.maxScore) *
+                      100
+                    }%`,
+                  }}
+                />
+
+              </div>
+
+            </div>
+
+            {/* Recommendation */}
+
+            <div className="mt-8 rounded-2xl bg-slate-50 p-6">
+
+              <h4 className="font-bold text-xl mb-4">
+
+                Recommendation
+
+              </h4>
+
+              {suitability.level ===
+              "High Potential" ? (
+
+                <p className="text-green-700">
+
+                  Excellent renewable energy site.
+                  Environmental conditions, terrain
+                  and GIS infrastructure indicate
+                  strong feasibility for deployment.
+
+                </p>
+
+              ) : suitability.level ===
+                "Moderate Potential" ? (
+
+                <p className="text-yellow-700">
+
+                  The location is suitable but
+                  additional feasibility studies are
+                  recommended before installation.
+
+                </p>
+
+              ) : (
+
+                <p className="text-red-700">
+
+                  This location has low renewable
+                  energy potential. Consider
+                  evaluating nearby alternative
+                  locations.
+
+                </p>
+
+              )}
+
+            </div>
+
+          </div>
+
+        </div>
+
+        {/* Reasons */}
+
+        <div className="mt-10">
+
+          <h3 className="text-2xl font-bold mb-6">
+
+            Analysis Summary
+
+          </h3>
+
+          <div className="grid md:grid-cols-2 gap-4">
+
+            {suitability.reasons.map(
+              (reason, index) => (
+
+                <div
+                  key={index}
+                  className="rounded-2xl bg-blue-50 border border-blue-100 p-5 flex gap-4"
+                >
+
+                  <HiOutlineCheckCircle
+                    className="text-blue-600 mt-1"
+                    size={22}
+                  />
+
+                  <span className="text-slate-700">
+
+                    {reason}
+
+                  </span>
+
+                </div>
+
+              )
+            )}
+
+          </div>
+
+        </div>
+
+        {/* Disclaimer */}
+
+        <div className="mt-10 rounded-2xl bg-amber-50 border border-amber-200 p-6">
+
+          <h4 className="font-semibold text-amber-800">
+
+            Note
+
+          </h4>
+
+          <p className="text-amber-700 mt-2 leading-7">
+
+            This suitability score is generated
+            using a transparent rule-based scoring
+            model derived from environmental,
+            terrain and GIS datasets.
+
+            It is intended to support preliminary
+            site screening and should be followed
+            by detailed engineering and financial
+            feasibility studies before project
+            implementation.
+
+          </p>
+
+        </div>
+
+      </div>
+
+    </div>
+
+  </div>
+)}
+
+{/* Resource Assessment Report */}
+
+{analysisResult && suitability && (
+  <ResourceAssessmentReport
+    analysisResult={analysisResult}
+    suitability={suitability}
+    locationDetails={locationDetails}
+    siteName={siteName}
+    project={
+      projects.find(
+        (p) => p.id === selectedProjectId
+      )
+    }
+  />
+)}
+
+</div>
+</DashboardLayout>
+);
 }

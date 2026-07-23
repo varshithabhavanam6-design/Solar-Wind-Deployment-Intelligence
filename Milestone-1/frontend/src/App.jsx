@@ -7,7 +7,6 @@ import Dashboard from "./pages/Dashboard";
 import Projects from "./pages/Projects";
 import ProjectDetails from "./pages/ProjectDetails";
 import CreateProject from "./pages/CreateProject";
-import SiteSelection from "./pages/SiteSelection";
 import SiteAnalysis from "./pages/SiteAnalysis";
 import Reports from "./pages/Reports";
 import Settings from "./pages/Settings";
@@ -40,10 +39,6 @@ function App() {
 
             <Route path="/create-project" element={
               <ProtectedRoute allowedRoles={["analyst"]}><CreateProject /></ProtectedRoute>
-            } />
-
-            <Route path="/site-selection" element={
-              <ProtectedRoute allowedRoles={["analyst"]}><SiteSelection /></ProtectedRoute>
             } />
 
             <Route path="/analysis" element={

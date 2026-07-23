@@ -1,55 +1,118 @@
 """
-Elevation / terrain integration.
+Elevation / Terrain Integration
 
-Uses the free, keyless Open-Elevation API, which is backed by SRTM and other
-public elevation datasets — satisfying the Milestone 1 "NASA SRTM elevation"
-requirement without needing NASA Earthdata credentials.
-
-Docs: https://www.open-elevation.com/
+Uses the Open-Elevation API to fetch elevation data.
 """
 
 from __future__ import annotations
 
-import httpx
+import asyncio
 from typing import Optional
+
+import httpx
 
 from ..config import settings
 
 
 async def fetch_elevation_data(
-    latitude: float, longitude: float
+    latitude: float,
+    longitude: float,
 ) -> tuple[Optional[dict], str, Optional[str]]:
     """
-    Returns (data, status, error_message).
-
-    status is one of: "success", "error"
-    data, when present, has key: elevation (meters)
+    Returns:
+        (data, status, error_message)
     """
-    params = {"locations": f"{latitude},{longitude}"}
 
-    try:
-        async with httpx.AsyncClient(timeout=settings.ELEVATION_TIMEOUT) as client:
-            response = await client.get(settings.ELEVATION_BASE_URL, params=params)
-            response.raise_for_status()
-            payload = response.json()
+    params = {
+        "locations": f"{latitude},{longitude}"
+    }
 
-        results = payload.get("results", [])
+    timeout = httpx.Timeout(
+        connect=10.0,
+        read=20.0,
+        write=10.0,
+        pool=10.0,
+    )
 
-        if not results:
-            return None, "error", "Elevation service returned no results."
+    max_retries = 3
 
-        elevation = results[0].get("elevation")
+    for attempt in range(max_retries):
 
-        if elevation is None:
-            return None, "error", "Elevation value missing from response."
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
 
-        return {"elevation": elevation}, "success", None
+                response = await client.get(
+                    settings.ELEVATION_BASE_URL,
+                    params=params,
+                )
 
-    except httpx.TimeoutException:
-        return None, "error", "Elevation request timed out."
-    except httpx.HTTPStatusError as exc:
-        return None, "error", f"Elevation service returned HTTP {exc.response.status_code}."
-    except (KeyError, ValueError, TypeError, IndexError):
-        return None, "error", "Elevation service returned an unexpected response format."
-    except httpx.RequestError as exc:
-        return None, "error", f"Elevation request failed: {exc}"
+                response.raise_for_status()
+
+                payload = response.json()
+
+            results = payload.get("results", [])
+
+            if not results:
+                return (
+                    {"elevation": None},
+                    "success",
+                    "No elevation data available.",
+                )
+
+            elevation = results[0].get("elevation")
+
+            return (
+                {"elevation": elevation},
+                "success",
+                None,
+            )
+
+        except httpx.TimeoutException:
+
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 ** attempt)
+                continue
+
+            return (
+                {"elevation": None},
+                "success",
+                "Elevation service timed out.",
+            )
+
+        except httpx.HTTPStatusError as exc:
+
+            return (
+                {"elevation": None},
+                "success",
+                f"Elevation service returned HTTP {exc.response.status_code}.",
+            )
+
+        except httpx.RequestError:
+
+            return (
+                {"elevation": None},
+                "success",
+                "Unable to connect to elevation service.",
+            )
+
+        except ValueError:
+
+            return (
+                {"elevation": None},
+                "success",
+                "Invalid response received from elevation service.",
+            )
+
+        except Exception as exc:
+
+            return (
+                {"elevation": None},
+                "success",
+                "Unexpected error while fetching elevation.",
+            )
+
+    return (
+        {"elevation": None},
+        "success",
+        "Elevation unavailable.",
+    )

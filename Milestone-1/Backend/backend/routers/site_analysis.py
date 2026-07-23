@@ -21,10 +21,12 @@ from ..schemas import (
     TerrainData,
     GisData,
     SourceStatus,
+    SolarPrediction,
 )
 from ..services.nasa_power_service import fetch_nasa_power_data
 from ..services.elevation_service import fetch_elevation_data
 from ..services.osm_service import fetch_osm_gis_data
+from ..services.solarPredictions import calculate_solar_prediction
 
 router = APIRouter(prefix="/api", tags=["site-analysis"])
 
@@ -44,6 +46,12 @@ async def analyze_site(request: SiteAnalysisRequest) -> SiteAnalysisResponse:
     nasa_data, nasa_status, nasa_error = nasa_result
     elevation_data, elevation_status, elevation_error = elevation_result
     osm_data, osm_status, osm_error = osm_result
+
+    # Generate solar prediction
+    solar_prediction = {}
+
+    if nasa_data:
+        solar_prediction = calculate_solar_prediction(nasa_data)
 
     errors: dict[str, str] = {}
     if nasa_error:
@@ -69,6 +77,7 @@ async def analyze_site(request: SiteAnalysisRequest) -> SiteAnalysisResponse:
             elevation=elevation_status,
             openStreetMap=osm_status,
         ),
+        solarPrediction=SolarPrediction(**solar_prediction),
         errors=errors,
     )
 

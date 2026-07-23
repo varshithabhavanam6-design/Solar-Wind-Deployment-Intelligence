@@ -57,11 +57,22 @@ class SourceStatus(BaseModel):
     elevation: str = "not_attempted"
     openStreetMap: str = "not_attempted"
 
+class SolarPrediction(BaseModel):
+    annualIrradiance: Optional[float] = None
+    peakSunHours: Optional[float] = None
+    dailyEnergyOutput: Optional[float] = None
+    annualEnergyOutput: Optional[float] = None
+    capacityFactor: Optional[float] = None
+    performanceRatio: Optional[float] = None
+    solarPotential: Optional[str] = None
+    panelEfficiency: Optional[float] = None
+
 
 class SiteAnalysisResponse(BaseModel):
     success: bool
     environmentalData: EnvironmentalData
     terrainData: TerrainData
     gisData: GisData
+    solarPrediction: SolarPrediction
     sources: SourceStatus
     errors: dict[str, str] = {}

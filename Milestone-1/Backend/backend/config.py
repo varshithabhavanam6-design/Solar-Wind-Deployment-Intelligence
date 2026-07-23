@@ -15,40 +15,62 @@ load_dotenv()
 
 
 class Settings:
-    # Comma-separated list of origins allowed to call this API.
-    # Defaults to the Vite dev server if not set.
+    # ------------------------------------------------------------------
+    # Frontend CORS Origins
+    # ------------------------------------------------------------------
     FRONTEND_ORIGINS: list[str] = [
         origin.strip()
         for origin in os.getenv(
-            "FRONTEND_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+            "FRONTEND_ORIGINS",
+            "http://localhost:5173,http://127.0.0.1:5173",
         ).split(",")
         if origin.strip()
     ]
 
-    # Timeouts (seconds) for outbound calls to external data sources.
-    NASA_POWER_TIMEOUT: float = float(os.getenv("NASA_POWER_TIMEOUT", "12"))
-    ELEVATION_TIMEOUT: float = float(os.getenv("ELEVATION_TIMEOUT", "10"))
-    OSM_TIMEOUT: float = float(os.getenv("OSM_TIMEOUT", "15"))
+    # ------------------------------------------------------------------
+    # API Timeouts (seconds)
+    # Increased timeout values because public APIs may respond slowly.
+    # ------------------------------------------------------------------
+    NASA_POWER_TIMEOUT: float = float(
+        os.getenv("NASA_POWER_TIMEOUT", "20")
+    )
 
-    # Radius (meters) used for the OpenStreetMap/Overpass proximity queries.
-    OSM_SEARCH_RADIUS_METERS: int = int(os.getenv("OSM_SEARCH_RADIUS_METERS", "3000"))
+    ELEVATION_TIMEOUT: float = float(
+        os.getenv("ELEVATION_TIMEOUT", "20")
+    )
 
-    # External endpoints — overridable via env in case a mirror/self-hosted
-    # Overpass instance is preferred later.
+    OSM_TIMEOUT: float = float(
+        os.getenv("OSM_TIMEOUT", "20")
+    )
+
+    # ------------------------------------------------------------------
+    # OSM Search Radius (meters)
+    # ------------------------------------------------------------------
+    OSM_SEARCH_RADIUS_METERS: int = int(
+        os.getenv("OSM_SEARCH_RADIUS_METERS", "1000")
+    )
+
+    # ------------------------------------------------------------------
+    # External API URLs
+    # ------------------------------------------------------------------
     NASA_POWER_BASE_URL: str = os.getenv(
         "NASA_POWER_BASE_URL",
         "https://power.larc.nasa.gov/api/temporal/climatology/point",
     )
+
     ELEVATION_BASE_URL: str = os.getenv(
-        "ELEVATION_BASE_URL", "https://api.open-elevation.com/api/v1/lookup"
-    )
-    OVERPASS_BASE_URL: str = os.getenv(
-        "OVERPASS_BASE_URL", "https://overpass-api.de/api/interpreter"
+        "ELEVATION_BASE_URL",
+        "https://api.open-elevation.com/api/v1/lookup",
     )
 
-    # Fallback Overpass mirrors, tried in order if the primary instance
-    # rejects or fails a request (e.g. HTTP 406/429/5xx). Comma-separated,
-    # overridable via env.
+    OVERPASS_BASE_URL: str = os.getenv(
+        "OVERPASS_BASE_URL",
+        "https://overpass-api.de/api/interpreter",
+    )
+
+    # ------------------------------------------------------------------
+    # Overpass Backup Servers
+    # ------------------------------------------------------------------
     OVERPASS_FALLBACK_URLS: list[str] = [
         url.strip()
         for url in os.getenv(
@@ -59,12 +81,13 @@ class Settings:
         if url.strip()
     ]
 
-    # Overpass's public instances reject requests that don't identify the
-    # calling application — a generic/missing User-Agent is a common cause
-    # of HTTP 406 responses from overpass-api.de.
+    # ------------------------------------------------------------------
+    # User-Agent for Overpass API
+    # ------------------------------------------------------------------
     OVERPASS_USER_AGENT: str = os.getenv(
         "OVERPASS_USER_AGENT",
-        "SolarWindDeploymentIntelligence/1.0 (Milestone1; contact: varshithabhavanam6@gmail.com)",
+        "SolarWindDeploymentIntelligence/1.0 "
+        "(Milestone2; contact: varshithabhavanam6@gmail.com)",
     )
 
 
