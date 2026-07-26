@@ -1,0 +1,128 @@
+@import "tailwindcss";
+
+/* Global Styles */
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: Arial, Helvetica, sans-serif;
+  background:
+  radial-gradient(circle at top left,#8fdddf25 0%,transparent 28%),
+  radial-gradient(circle at bottom right,#b1c4ea20 0%,transparent 32%),
+  linear-gradient(135deg,#7fbdf0,#62a7ec,#3e98e7);background-color: #ffffff;
+  color: #000000;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Text Selection */
+
+::selection {
+  background: rgba(34, 197, 94, 0.2);
+  color: #000;
+}
+
+/* Scroll Reveal Animation */
+
+.reveal {
+  opacity: 0;
+  transform: translateY(30px);
+  transition:
+    opacity 0.7s ease,
+    transform 0.7s ease;
+}
+
+.reveal.reveal-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Accessibility */
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* Gradient Text */
+
+.text-gradient {
+  background: linear-gradient(
+    90deg,
+    #0F172A 0%,
+    #2563EB 50%,
+    #22C55E 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Glass Effect */
+
+.glass {
+  background: rgba(255, 255, 255, 0.65);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 20px;
+}
+
+/* Dark Glass */
+
+.glass-dark {
+  background: rgba(15, 23, 42, 0.6);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+}
+
+/* Smooth Buttons */
+
+.btn {
+  transition: all 0.3s ease;
+}
+
+.btn:hover {
+  transform: translateY(-2px);
+}
+
+/* Images */
+
+img {
+  max-width: 100%;
+  display: block;
+}
+
+/* Links */
+
+a {
+  text-decoration: none;
+}
+
+/* Section Padding */
+
+.section {
+  padding: 5rem 1.5rem;
+}
+
+/* Container */
+
+.container-custom {
+  width: 90%;
+  max-width: 1280px;
+  margin: auto;
+}
